@@ -1,0 +1,47 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/python
+{
+    "name": "ir-torch",
+    // Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
+    "image": "mcr.microsoft.com/devcontainers/python:3.12-trixie",
+    "runArgs": [
+        "--gpus",
+        "all",
+        "--shm-size",
+        "2g"
+    ],
+    "mounts": [
+        "source=${devcontainerId}-huggingface-cache,target=/home/vscode/.cache/huggingface,type=volume",
+        "source=${devcontainerId}-pip-cache,target=/home/vscode/.cache/pip,type=volume",
+        "source=${devcontainerId}-uv-cache,target=/home/vscode/.cache/uv,type=volume"
+    ],
+    "features": {
+        "ghcr.io/devcontainers/features/copilot-cli:1": {},
+        "ghcr.io/devcontainers/features/github-cli:1": {},
+        "ghcr.io/stuartleeks/dev-container-features/shell-history:0": {}
+    },
+
+    "containerUser": "vscode",
+
+    // Use 'postCreateCommand' to run commands after the container is created.
+    "postCreateCommand": "./.devcontainer/postCreateCommand.sh",
+
+    // Configure tool-specific properties.
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "editorconfig.editorconfig",
+                "charliermarsh.ruff",
+                "GitHub.copilot"
+            ],
+            "settings": {
+                "python.testing.pytestArgs": ["tests"],
+                "python.testing.unittestEnabled": false,
+                "python.testing.pytestEnabled": true,
+                "python.defaultInterpreterPath": "/workspaces/ir-torch/.venv/bin/python",
+                "python.testing.pytestPath": "/workspaces/ir-torch/.venv/bin/pytest"
+            }
+        }
+    }
+}
