@@ -32,7 +32,7 @@ class PointwiseKLDivergenceLoss(nn.Module):
         logits: torch.Tensor,
         labels: torch.Tensor,
         item_mask: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor] | None]:
         log_probs = F.log_softmax(logits, dim=-1)
         targets = labels / labels.sum(dim=-1, keepdim=True).clamp(min=1e-8)
 
@@ -44,8 +44,8 @@ class PointwiseKLDivergenceLoss(nn.Module):
 
         if self.reduction == "mean":
             if item_mask is not None:
-                return kl.sum() / item_mask.sum().clamp(min=1)
-            return kl.mean()
+                return kl.sum() / item_mask.sum().clamp(min=1), None
+            return kl.mean(), None
         if self.reduction == "sum":
-            return kl.sum()
-        return kl
+            return kl.sum(), None
+        return kl, None

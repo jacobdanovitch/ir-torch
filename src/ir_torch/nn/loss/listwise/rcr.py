@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import torch
-import torch.nn as nn
+
+from ir_torch.nn.loss.listwise.listnet import ListNetLoss
+from ir_torch.nn.loss.multitask import WeightedMultiTaskLoss
+from ir_torch.nn.loss.pointwise.mse import PointwiseMSELoss
 
 
-class RCRLoss(nn.Module):
+class RCRLoss(WeightedMultiTaskLoss):
     """Regression Compatible Ranking (RCR) loss (Busa-Fekete et al., 2021).
 
     Combines a pointwise regression objective (MSE) with a listwise ranking
@@ -21,12 +24,17 @@ class RCRLoss(nn.Module):
         - logits: ``(batch, items, 1)``
         - labels: ``(batch, items, 1)``
         - item_mask: ``(batch, items)`` or ``None``
-        - output: scalar (unless ``reduction='none'``)
+        - output: ``(scalar, {"mse": ..., "listnet": ...})`` (unless ``reduction='none'``)
     """
 
     def __init__(self, alpha: float = 0.5, reduction: str = "mean"):
-        super().__init__()
-        self.alpha = alpha
+        # Sub-losses always use reduction="none" so we get per-query values
+        # and handle final reduction here (MSE returns (batch, items) which
+        # we reduce to (batch,) to match ListNet's (batch,) shape).
+        super().__init__({
+            "mse": (alpha, PointwiseMSELoss(reduction="none")),
+            "listnet": (1.0 - alpha, ListNetLoss(reduction="none")),
+        })
         self.reduction = reduction
 
     def forward(
@@ -34,42 +42,31 @@ class RCRLoss(nn.Module):
         logits: torch.Tensor,
         labels: torch.Tensor,
         item_mask: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        scores = logits.squeeze(-1)  # (batch, items)
-        y = labels.squeeze(-1).float()  # (batch, items)
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor] | None]:
+        # Get per-item MSE and per-query ListNet
+        mse_result = self.mse(logits, labels, item_mask=item_mask)
+        mse_per_item = mse_result[0] if isinstance(mse_result, tuple) else mse_result
 
-        # --- Pointwise MSE component ---
-        mse = (scores - y).pow(2)  # (batch, items)
-        if item_mask is not None:
-            mse = mse * item_mask
+        listnet_result = self.listnet(logits, labels, item_mask=item_mask)
+        listnet_per_query = listnet_result[0] if isinstance(listnet_result, tuple) else listnet_result
 
-        # --- Listwise (ListNet-style) component ---
+        # Reduce MSE from (batch, items) to (batch,) to match ListNet
         if item_mask is not None:
-            fill = torch.finfo(scores.dtype).min
-            masked_scores = scores.masked_fill(~item_mask, fill)
-            masked_y = y.masked_fill(~item_mask, 0.0)
+            mse_per_query = mse_per_item.sum(dim=-1) / item_mask.sum(dim=-1).clamp(min=1)
         else:
-            masked_scores = scores
-            masked_y = y
+            mse_per_query = mse_per_item.mean(dim=-1)
 
-        p_y = torch.softmax(masked_y, dim=-1)
-        log_p_s = torch.log_softmax(masked_scores, dim=-1)
-        listnet = -(p_y * log_p_s).sum(dim=-1)  # (batch,)
+        alpha = self._weights["mse"]
+        beta = self._weights["listnet"]
+        per_query = alpha * mse_per_query + beta * listnet_per_query
 
-        # --- Combine ---
-        if self.reduction == "none":
-            # Return per-query loss
-            if item_mask is not None:
-                mse_per_query = mse.sum(dim=-1) / item_mask.sum(dim=-1).clamp(min=1)
-            else:
-                mse_per_query = mse.mean(dim=-1)
-            return self.alpha * mse_per_query + (1.0 - self.alpha) * listnet
+        sub_losses: dict[str, torch.Tensor] = {
+            "mse": mse_per_query.detach().mean(),
+            "listnet": listnet_per_query.detach().mean(),
+        }
 
         if self.reduction == "mean":
-            mse_loss = mse.sum() / item_mask.sum().clamp(min=1) if item_mask is not None else mse.mean()
-            listnet_loss = listnet.mean()
-        else:  # sum
-            mse_loss = mse.sum()
-            listnet_loss = listnet.sum()
-
-        return self.alpha * mse_loss + (1.0 - self.alpha) * listnet_loss
+            return per_query.mean(), sub_losses
+        if self.reduction == "sum":
+            return per_query.sum(), sub_losses
+        return per_query, sub_losses

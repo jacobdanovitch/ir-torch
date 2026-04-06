@@ -33,7 +33,7 @@ class PointwiseBCELoss(nn.Module):
         logits: torch.Tensor,
         labels: torch.Tensor,
         item_mask: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor] | None]:
         scores = logits.squeeze(-1)  # (batch, items)
         targets = labels.squeeze(-1).float()  # (batch, items)
         if self.label_max != 1.0:
@@ -46,8 +46,8 @@ class PointwiseBCELoss(nn.Module):
 
         if self.reduction == "mean":
             if item_mask is not None:
-                return loss.sum() / item_mask.sum().clamp(min=1)
-            return loss.mean()
+                return loss.sum() / item_mask.sum().clamp(min=1), None
+            return loss.mean(), None
         if self.reduction == "sum":
-            return loss.sum()
-        return loss
+            return loss.sum(), None
+        return loss, None

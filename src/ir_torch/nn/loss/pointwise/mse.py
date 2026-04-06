@@ -29,7 +29,7 @@ class PointwiseMSELoss(nn.Module):
         logits: torch.Tensor,
         labels: torch.Tensor,
         item_mask: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor] | None]:
         loss = (logits.squeeze(-1) - labels.squeeze(-1)).pow(2)
 
         if item_mask is not None:
@@ -37,8 +37,8 @@ class PointwiseMSELoss(nn.Module):
 
         if self.reduction == "mean":
             if item_mask is not None:
-                return loss.sum() / item_mask.sum().clamp(min=1)
-            return loss.mean()
+                return loss.sum() / item_mask.sum().clamp(min=1), None
+            return loss.mean(), None
         if self.reduction == "sum":
-            return loss.sum()
-        return loss
+            return loss.sum(), None
+        return loss, None

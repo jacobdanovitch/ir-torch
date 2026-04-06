@@ -34,7 +34,7 @@ class ListwiseKLDivergenceLoss(nn.Module):
         logits: torch.Tensor,
         labels: torch.Tensor,
         item_mask: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor] | None]:
         scores = logits.squeeze(-1)  # (batch, items)
         y = labels.squeeze(-1).float()  # (batch, items)
 
@@ -52,7 +52,7 @@ class ListwiseKLDivergenceLoss(nn.Module):
         loss = F.kl_div(log_probs, target, reduction="none").sum(dim=-1)  # (batch,)
 
         if self.reduction == "mean":
-            return loss.mean()
+            return loss.mean(), None
         if self.reduction == "sum":
-            return loss.sum()
-        return loss
+            return loss.sum(), None
+        return loss, None
