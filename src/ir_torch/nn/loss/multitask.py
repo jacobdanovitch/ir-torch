@@ -75,3 +75,97 @@ class WeightedMultiTaskLoss(MultiTaskLoss):
             total = total + weight * loss_val
 
         return total, sub_losses
+
+
+class CalibratedListwiseLoss(WeightedMultiTaskLoss):
+    """Listwise loss calibrated by a pointwise regression term.
+
+    Combines one pointwise loss (per-item, e.g. MSE) with one listwise loss
+    (per-query, e.g. ListNet) using a mixing coefficient ``alpha``.
+    Sub-losses are always evaluated with ``reduction='none'``; the pointwise
+    component is reduced from ``(batch, items)`` to ``(batch,)`` before
+    combining, and the final reduction is applied here.
+
+    ``L = alpha * pointwise(scores, labels) + (1 - alpha) * listwise(scores, labels)``
+
+    When ``pointwise_fallback=True`` (the default), queries whose labels are
+    all identical fall back to using only the pointwise loss.  Listwise losses
+    produce uninformative gradients for such queries (e.g. softmax over equal
+    values is uniform regardless of scores), so using only the pointwise term
+    gives a meaningful training signal.
+
+    Args:
+        pointwise: A pointwise loss module (returns ``(batch, items)`` with
+            ``reduction='none'``).
+        listwise: A listwise loss module (returns ``(batch,)`` with
+            ``reduction='none'``).
+        alpha: Weight of the pointwise term (default 0.5).
+        reduction: ``'mean'`` | ``'sum'`` | ``'none'``.
+        pointwise_fallback: If ``True``, queries with uniform labels use
+            only the pointwise loss (default ``True``).
+
+    Shapes:
+        - logits: ``(batch, items, 1)``
+        - labels: ``(batch, items, 1)``
+        - item_mask: ``(batch, items)`` or ``None``
+        - output: ``(scalar, {"pointwise": ..., "listwise": ...})``
+    """
+
+    def __init__(
+        self,
+        pointwise: nn.Module,
+        listwise: nn.Module,
+        alpha: float = 0.5,
+        reduction: str = "mean",
+        pointwise_fallback: bool = True,
+    ):
+        super().__init__({
+            "pointwise": (alpha, pointwise),
+            "listwise": (1.0 - alpha, listwise),
+        })
+        self.reduction = reduction
+        self.pointwise_fallback = pointwise_fallback
+
+    def forward(
+        self,
+        logits: torch.Tensor,
+        labels: torch.Tensor,
+        item_mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor] | None]:
+        pw_result = self.pointwise(logits, labels, item_mask=item_mask)
+        pw_per_item = pw_result[0] if isinstance(pw_result, tuple) else pw_result
+
+        lw_result = self.listwise(logits, labels, item_mask=item_mask)
+        lw_per_query = lw_result[0] if isinstance(lw_result, tuple) else lw_result
+
+        # Reduce pointwise from (batch, items) → (batch,)
+        if item_mask is not None:
+            pw_per_query = pw_per_item.sum(dim=-1) / item_mask.sum(dim=-1).clamp(min=1)
+        else:
+            pw_per_query = pw_per_item.mean(dim=-1)
+
+        alpha = self._weights["pointwise"]
+        beta = self._weights["listwise"]
+        per_query = alpha * pw_per_query + beta * lw_per_query
+
+        # Fall back to pointwise-only for queries with uniform labels
+        if self.pointwise_fallback:
+            y = labels.squeeze(-1)  # (batch, items)
+            if item_mask is not None:
+                # Compare each label to the first valid label per query
+                first = (y * item_mask).sum(dim=-1) / item_mask.sum(dim=-1).clamp(min=1)
+                uniform = ((y - first.unsqueeze(-1)).abs() * item_mask).sum(dim=-1) == 0
+            else:
+                uniform = (y == y[:, :1]).all(dim=-1)  # (batch,)
+            per_query = torch.where(uniform, pw_per_query, per_query)
+
+        sub_losses: dict[str, torch.Tensor] = {
+            "pointwise": pw_per_query.detach().mean(),
+            "listwise": lw_per_query.detach().mean(),
+        }
+
+        if self.reduction == "mean":
+            return per_query.mean(), sub_losses
+        if self.reduction == "sum":
+            return per_query.sum(), sub_losses
+        return per_query, sub_losses

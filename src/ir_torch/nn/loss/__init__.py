@@ -8,13 +8,14 @@ from .listwise import (
     NDCGWeighting,
     RCRLoss,
 )
-from .multitask import MultiTaskLoss, WeightedMultiTaskLoss
+from .multitask import CalibratedListwiseLoss, MultiTaskLoss, WeightedMultiTaskLoss
 from .pairwise import MSEMarginLoss, RankNetLoss
 from .pointwise import PointwiseBCELoss, PointwiseKLDivergenceLoss, PointwiseMSELoss
 
 __all__ = [
     "ARPWeighting",
     "ApproxRankMSELoss",
+    "CalibratedListwiseLoss",
     "LambdaRankLoss",
     "ListNetLoss",
     "ListwiseKLDivergenceLoss",
