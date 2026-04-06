@@ -53,13 +53,31 @@ class _RankingDatasetBase:
 
     @staticmethod
     def _split_example(example: RankingExample, max_items: int) -> list[RankingExample]:
-        """Split an example into sub-queries of at most *max_items* items."""
+        """Split an example into sub-queries of at most *max_items* items.
+
+        Items are interleaved across sub-queries so that each group contains a
+        mix of label values whenever possible.  This avoids creating sub-queries
+        with uniform labels, which would make pairwise/listwise losses
+        degenerate (zero or undefined).
+        """
         items = example.items
         if len(items) <= max_items:
             return [example]
-        return [
-            RankingExample(query=example.query, items=items[i : i + max_items]) for i in range(0, len(items), max_items)
-        ]
+
+        # Sort by label so the interleave distributes grades evenly.
+        # For sequence labels, compare element-wise via tuple conversion.
+        def _label_key(item: RankingItem) -> tuple:
+            lab = item.label
+            return tuple(lab) if isinstance(lab, (list, tuple)) else (lab,)
+
+        sorted_items = sorted(items, key=_label_key)
+
+        n_groups = -(-len(sorted_items) // max_items)  # ceil division
+        groups: list[list[RankingItem]] = [[] for _ in range(n_groups)]
+        for idx, item in enumerate(sorted_items):
+            groups[idx % n_groups].append(item)
+
+        return [RankingExample(query=example.query, items=group) for group in groups]
 
 
 class RankingDataset(_RankingDatasetBase, Dataset):
